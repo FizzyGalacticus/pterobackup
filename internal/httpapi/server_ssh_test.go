@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/FizzyGalacticus/pterobackup/internal/domain"
+	"github.com/fizzygalacticus/pterobackup/internal/domain"
 )
 
 func TestPublicKeyFromSSHConfig_NoKey(t *testing.T) {

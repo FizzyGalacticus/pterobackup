@@ -1,4 +1,4 @@
-module github.com/FizzyGalacticus/pterobackup
+module github.com/fizzygalacticus/pterobackup
 
 go 1.23.0
 

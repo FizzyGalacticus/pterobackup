@@ -11,8 +11,8 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/FizzyGalacticus/pterobackup/internal/backup"
-	"github.com/FizzyGalacticus/pterobackup/internal/domain"
+	"github.com/fizzygalacticus/pterobackup/internal/backup"
+	"github.com/fizzygalacticus/pterobackup/internal/domain"
 )
 
 var _ backup.SSHSessionFactory = (*SSHFactory)(nil)

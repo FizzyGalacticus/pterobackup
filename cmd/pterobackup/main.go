@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/FizzyGalacticus/pterobackup/internal/backup"
-	"github.com/FizzyGalacticus/pterobackup/internal/domain"
-	"github.com/FizzyGalacticus/pterobackup/internal/httpapi"
-	"github.com/FizzyGalacticus/pterobackup/internal/remote"
-	"github.com/FizzyGalacticus/pterobackup/internal/scheduler"
+	"github.com/fizzygalacticus/pterobackup/internal/backup"
+	"github.com/fizzygalacticus/pterobackup/internal/domain"
+	"github.com/fizzygalacticus/pterobackup/internal/httpapi"
+	"github.com/fizzygalacticus/pterobackup/internal/remote"
+	"github.com/fizzygalacticus/pterobackup/internal/scheduler"
 )
 
 func main() {

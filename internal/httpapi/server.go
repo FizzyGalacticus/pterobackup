@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/FizzyGalacticus/pterobackup/internal/backup"
-	"github.com/FizzyGalacticus/pterobackup/internal/config"
-	"github.com/FizzyGalacticus/pterobackup/internal/domain"
-	"github.com/FizzyGalacticus/pterobackup/internal/remote"
-	"github.com/FizzyGalacticus/pterobackup/internal/web"
+	"github.com/fizzygalacticus/pterobackup/internal/backup"
+	"github.com/fizzygalacticus/pterobackup/internal/config"
+	"github.com/fizzygalacticus/pterobackup/internal/domain"
+	"github.com/fizzygalacticus/pterobackup/internal/remote"
+	"github.com/fizzygalacticus/pterobackup/internal/web"
 
 	"golang.org/x/crypto/ssh"
 )
