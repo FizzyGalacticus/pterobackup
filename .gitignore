@@ -1,4 +1,4 @@
 bin/
 coverage.out
-config
-backups
+/config/
+/backups/
