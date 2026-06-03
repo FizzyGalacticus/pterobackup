@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"pterobackup/internal/domain"
+	"github.com/FizzyGalacticus/pterobackup/internal/domain"
 )
 
 // Service performs backup and restore operations using an SSH connection.

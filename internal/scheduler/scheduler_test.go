@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"pterobackup/internal/domain"
+	"github.com/FizzyGalacticus/pterobackup/internal/domain"
 )
 
 type fakeStore struct {

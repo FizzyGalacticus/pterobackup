@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"pterobackup/internal/domain"
+	"github.com/FizzyGalacticus/pterobackup/internal/domain"
 )
 
 var unsafeNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

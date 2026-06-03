@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"pterobackup/internal/domain"
+	"github.com/FizzyGalacticus/pterobackup/internal/domain"
 )
 
 type ConfigStore interface {
