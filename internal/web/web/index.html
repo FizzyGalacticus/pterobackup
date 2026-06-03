@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PteroBackup</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header>
+        <h1>PteroBackup</h1>
+        <p>Configure SSH, backup targets, and run backup/restore operations.</p>
+      </header>
+
+      <section class="card">
+        <h2>Remote Host</h2>
+        <div class="grid two">
+          <label>Host <input id="host" type="text" placeholder="192.168.1.100" /></label>
+          <label>Port <input id="port" type="number" value="22" /></label>
+          <label>Username <input id="username" type="text" /></label>
+          <label>
+            Auth Method
+            <select id="authMethod">
+              <option value="password">password</option>
+              <option value="key">key</option>
+            </select>
+          </label>
+          <label>Password <input id="password" type="password" /></label>
+          <label>Upload Private Key <input id="privateKeyFile" type="file" accept=".pem,.key,.txt" /></label>
+          <label class="span-two">Private Key Content <textarea id="privateKeyValue" rows="8" placeholder="Paste or upload your private key"></textarea></label>
+        </div>
+        <div class="public-key-card">
+          <div class="row">
+            <h3>Derived Public Key</h3>
+            <div class="inline-actions">
+              <button id="generateKeypair" type="button">Generate New Keypair</button>
+              <button id="copyPublicKey" type="button">Copy</button>
+            </div>
+          </div>
+          <pre id="publicKeyOutput">No SSH key configured.</pre>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row">
+          <h2>Backup Items</h2>
+          <button id="addItem" type="button">Add Item</button>
+        </div>
+        <div id="itemsBody" class="items-list"></div>
+      </section>
+
+      <section class="actions">
+        <button id="saveConfig" class="primary" type="button">Save Config</button>
+        <button id="runBackup" type="button">Run Backup</button>
+        <button id="runRestore" type="button">Run Restore</button>
+      </section>
+
+      <section class="card">
+        <h2>Output</h2>
+        <pre id="output"></pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

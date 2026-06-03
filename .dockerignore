@@ -1,0 +1,7 @@
+.git
+.gitignore
+*.md
+coverage.out
+bin
+config
+backups
