@@ -119,9 +119,29 @@ async function loadItemArtifacts(itemId, listNode) {
         <li class="artifact-row">
           <span class="artifact-name">${escapeHtml(item.name)}</span>
           <span class="artifact-size">${Number(item.sizeMB || 0).toFixed(2)} MB</span>
+          <button type="button" class="artifact-delete danger-sm" data-name="${escapeHtml(item.name)}">Delete</button>
         </li>
       `)
       .join('');
+
+    listNode.querySelectorAll('.artifact-delete').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.name;
+        if (!confirm(`Delete backup file "${name}"?`)) {
+          return;
+        }
+        try {
+          await callJSON(
+            `/api/backup/item/file?itemId=${encodeURIComponent(itemId)}&name=${encodeURIComponent(name)}`,
+            'DELETE',
+          );
+          log(`Deleted ${name}`);
+          await loadItemArtifacts(itemId, listNode);
+        } catch (err) {
+          log(`Delete failed: ${err.message}`);
+        }
+      });
+    });
   } catch (err) {
     listNode.innerHTML = `<li class="artifact-empty">Failed to load artifacts: ${escapeHtml(err.message)}</li>`;
     if (detailsNode) {
@@ -365,7 +385,18 @@ document.getElementById('copyPublicKey').addEventListener('click', async () => {
   }
 
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
     log('Copied public key to clipboard');
   } catch (err) {
     log(`Clipboard copy failed: ${err.message}`);

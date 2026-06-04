@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/backup", s.handleBackup)
 	mux.HandleFunc("/api/backup/item", s.handleBackupItem)
 	mux.HandleFunc("/api/backup/item/files", s.handleBackupItemFiles)
+	mux.HandleFunc("/api/backup/item/file", s.handleDeleteBackupFile)
 	mux.HandleFunc("/api/restore", s.handleRestore)
 	mux.HandleFunc("/api/restore/item", s.handleRestoreItem)
 	mux.HandleFunc("/api/schedule", s.handleSchedule)
@@ -220,6 +222,58 @@ func (s *Server) handleBackupItemFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": artifacts})
 }
 
+func (s *Server) handleDeleteBackupFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	itemID := strings.TrimSpace(r.URL.Query().Get("itemId"))
+	fileName := strings.TrimSpace(r.URL.Query().Get("name"))
+	if itemID == "" || fileName == "" {
+		writeErr(w, http.StatusBadRequest, "params", errors.New("itemId and name are required"))
+		return
+	}
+
+	// Reject any path traversal attempts.
+	if strings.ContainsAny(fileName, "/\\") || fileName == ".." {
+		writeErr(w, http.StatusBadRequest, "name", errors.New("invalid file name"))
+		return
+	}
+
+	cfg, err := s.store.Load()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load config", err)
+		return
+	}
+
+	item, err := findItemByID(cfg, itemID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "find backup item", err)
+		return
+	}
+
+	targetDir := backup.TargetDirectoryForItem(*item)
+	path := filepath.Join(targetDir, fileName)
+
+	// Confirm the resolved path is still inside targetDir.
+	if !strings.HasPrefix(path, targetDir+string(os.PathSeparator)) {
+		writeErr(w, http.StatusBadRequest, "name", errors.New("invalid file name"))
+		return
+	}
+
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeErr(w, http.StatusNotFound, "delete file", err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "delete file", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleRestoreItem(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -305,6 +359,9 @@ func listBackupArtifacts(item domain.BackupItem) ([]backupArtifact, error) {
 	items := make([]withTime, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 

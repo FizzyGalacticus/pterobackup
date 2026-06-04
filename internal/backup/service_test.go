@@ -13,7 +13,7 @@ import (
 )
 
 type fakeFactory struct {
-	exec     *fakeExecutor
+	exec     RemoteExecutor
 	transfer *fakeTransfer
 	closer   fakeCloser
 }
@@ -39,6 +39,21 @@ func (f *fakeExecutor) Run(_ context.Context, command string) (string, string, e
 		return "dir\n", "", nil
 	}
 	return "", "", nil
+}
+
+// hashingExecutor behaves like fakeExecutor but returns a configurable hash
+// for sha256sum commands, enabling tests of the deduplication path.
+type hashingExecutor struct {
+	fakeExecutor
+	hash string
+}
+
+func (h *hashingExecutor) Run(ctx context.Context, command string) (string, string, error) {
+	if strings.Contains(command, "sha256sum") {
+		h.commands = append(h.commands, command)
+		return h.hash + "\n", "", nil
+	}
+	return h.fakeExecutor.Run(ctx, command)
 }
 
 type fakeTransfer struct {
@@ -121,8 +136,8 @@ func TestRunRestoreUploadsLatestBackup(t *testing.T) {
 		t.Fatalf("mkdir targetDir: %v", err)
 	}
 
-	first := filepath.Join(targetDir, "panel_data_20240101T000000Z.tar.gz")
-	second := filepath.Join(targetDir, "panel_data_20250101T000000Z.tar.gz")
+	first := filepath.Join(targetDir, "20240101-abc123def456-000000Z.tar.gz")
+	second := filepath.Join(targetDir, "20250101-xyz789def456-000000Z.tar.gz")
 	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
 		t.Fatalf("write first: %v", err)
 	}
@@ -227,5 +242,56 @@ func TestRunBackupPrunesOldBackupsByMaxBackups(t *testing.T) {
 
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 retained backups, got %d", len(entries))
+	}
+}
+
+func TestRunBackupSkipsWhenContentUnchanged(t *testing.T) {
+	const knownHash = "abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+
+	exec := &hashingExecutor{hash: knownHash}
+	transfer := &fakeTransfer{}
+	svc := NewService(fakeFactory{exec: exec, transfer: transfer, closer: fakeCloser{}})
+
+	rootDir := t.TempDir()
+	t.Setenv("PTEROBACKUP_BACKUP_DIR", rootDir)
+
+	cfg := domain.AppConfig{
+		Backups: []domain.BackupItem{{
+			ID:            "abc",
+			ContainerName: "panel",
+			ContainerPath: "/var/lib/data",
+			BackupName:    "panel-data",
+			MaxBackups:    5,
+		}},
+	}
+
+	// First run — hash is new, backup should be downloaded.
+	result, err := svc.RunBackup(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first backup run: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result.Results))
+	}
+	if result.Results[0].Skipped {
+		t.Fatal("first run should not be skipped")
+	}
+	if len(transfer.downloads) != 1 {
+		t.Fatalf("expected 1 download on first run, got %d", len(transfer.downloads))
+	}
+
+	// Second run — same hash, backup should be skipped.
+	result, err = svc.RunBackup(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("second backup run: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result.Results))
+	}
+	if !result.Results[0].Skipped {
+		t.Fatal("second run should be skipped because content hash is unchanged")
+	}
+	if len(transfer.downloads) != 1 {
+		t.Fatalf("expected no additional download on second run, got %d total", len(transfer.downloads))
 	}
 }

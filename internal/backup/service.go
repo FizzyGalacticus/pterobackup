@@ -84,7 +84,18 @@ func runSingleBackup(ctx context.Context, exec RemoteExecutor, transfer FileTran
 	}
 
 	payloadType := strings.TrimSpace(stdout)
-	baseName := backupBaseName(item.ContainerName, item.ContainerPath)
+
+	currentHash, err := computeRemotePayloadHash(ctx, exec, remotePayload, payloadType == "dir")
+	if err != nil {
+		return domain.BackupOutcome{}, err
+	}
+
+	if lastHash := readStoredHash(targetDir); lastHash != "" && lastHash == currentHash {
+		_, _, _ = exec.Run(ctx, shellCommand("rm -rf %s", staging))
+		return domain.BackupOutcome{ItemID: item.ID, Skipped: true}, nil
+	}
+
+	baseName := backupBaseName(currentHash)
 	localPath := filepath.Join(targetDir, baseName)
 	remoteDownloadPath := remotePayload
 	isCompressed := false
@@ -162,7 +173,6 @@ func latestBackupForItem(rootDir string, item domain.BackupItem) (path string, c
 		return "", false, fmt.Errorf("read local target path %s: %w", targetDir, err)
 	}
 
-	prefix := fmt.Sprintf("%s_%s_", sanitizeName(item.ContainerName), sanitizeName(filepath.Base(strings.TrimRight(item.ContainerPath, "/"))))
 	latestName := ""
 	for _, e := range entries {
 		if e.IsDir() {
@@ -170,7 +180,8 @@ func latestBackupForItem(rootDir string, item domain.BackupItem) (path string, c
 		}
 
 		name := e.Name()
-		if !strings.HasPrefix(name, prefix) {
+		// Skip the old hash file if it exists
+		if name == lastHashFile {
 			continue
 		}
 
@@ -186,6 +197,72 @@ func latestBackupForItem(rootDir string, item domain.BackupItem) (path string, c
 	fullPath := filepath.Join(targetDir, latestName)
 
 	return fullPath, strings.HasSuffix(latestName, ".tar.gz"), nil
+}
+
+const lastHashFile = ".last_hash"
+
+// computeRemotePayloadHash returns a SHA-256 hash of the remote payload content.
+// For directories, each file's content and path are hashed together to produce
+// a single deterministic digest. Returns an empty string if the remote command
+// is unavailable, in which case hash-based deduplication is skipped.
+func computeRemotePayloadHash(ctx context.Context, exec RemoteExecutor, payloadPath string, isDir bool) (string, error) {
+	var cmd string
+	if isDir {
+		cmd = shellCommand(
+			"find %s -type f | LC_ALL=C sort | xargs -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}'",
+			shellEscape(payloadPath),
+		)
+	} else {
+		cmd = shellCommand("sha256sum %s | awk '{print $1}'", shellEscape(payloadPath))
+	}
+
+	stdout, stderr, err := exec.Run(ctx, cmd)
+	if err != nil {
+		return "", remoteErr("compute content hash", err, stderr)
+	}
+
+	return strings.TrimSpace(stdout), nil
+}
+
+// readStoredHash extracts the hash from the latest backup filename in targetDir.
+// Returns empty string if no backup exists or hash cannot be extracted.
+func readStoredHash(targetDir string) string {
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		return ""
+	}
+
+	latestName := ""
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == lastHashFile {
+			continue
+		}
+		if e.Name() > latestName {
+			latestName = e.Name()
+		}
+	}
+
+	if latestName == "" {
+		return ""
+	}
+
+	// Extract hash from filename: <date>-<hash>-<timestamp>
+	parts := strings.Split(latestName, "-")
+	if len(parts) >= 3 {
+		// Remove extension if present for comparison
+		name := strings.TrimSuffix(parts[len(parts)-1], ".tar.gz")
+		if name != parts[len(parts)-1] {
+			// It was a .tar.gz file, hash is at index 1
+			return parts[1]
+		}
+		// Could be a single file, try to extract hash
+		// Format: YYYYMMDD-HASH-HHMMSSZ or YYYYMMDD-HASH-HHMMSSZ.tar.gz
+		if len(parts) >= 3 {
+			return parts[1]
+		}
+	}
+
+	return ""
 }
 
 func shellEscape(v string) string {
@@ -223,6 +300,9 @@ func pruneBackups(targetDir string, maxBackups int) error {
 	files := make([]backupFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 

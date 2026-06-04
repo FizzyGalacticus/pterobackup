@@ -189,6 +189,23 @@ input::placeholder {
 .artifact-size {
   color: var(--muted);
   white-space: nowrap;
+  margin-left: auto;
+}
+
+.artifact-delete.danger-sm {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.artifact-delete.danger-sm:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 .artifact-empty {

@@ -41,8 +41,9 @@ type AppConfig struct {
 // BackupOutcome reports the output path and metadata for one backup run.
 type BackupOutcome struct {
 	ItemID       string `json:"itemId"`
-	ArchivePath  string `json:"archivePath"`
+	ArchivePath  string `json:"archivePath,omitempty"`
 	IsCompressed bool   `json:"isCompressed"`
+	Skipped      bool   `json:"skipped,omitempty"`
 }
 
 // BackupRunResult contains per-item outcomes.

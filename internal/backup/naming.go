@@ -13,17 +13,11 @@ import (
 
 var unsafeNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-func backupBaseName(containerName, containerPath string) string {
-	cleanContainer := sanitizeName(containerName)
-	base := filepath.Base(strings.TrimRight(containerPath, "/"))
-	cleanBase := sanitizeName(base)
-	if cleanBase == "" || cleanBase == "." || cleanBase == "/" {
-		cleanBase = "root"
-	}
+func backupBaseName(hash string) string {
+	ts := time.Now().UTC().Format("20060102-150405Z")
+	date := time.Now().UTC().Format("20060102")
 
-	ts := time.Now().UTC().Format("20060102T150405Z")
-
-	return fmt.Sprintf("%s_%s_%s", cleanContainer, cleanBase, ts)
+	return fmt.Sprintf("%s-%s-%s", date, hash, ts)
 }
 
 func sanitizeName(v string) string {
