@@ -246,20 +246,10 @@ func readStoredHash(targetDir string) string {
 		return ""
 	}
 
-	// Extract hash from filename: <date>-<hash>-<timestamp>
+	// Filename format: <YYYYMMDD>-<HHMMSSZ>-<sha256hash>[.tar.gz]
 	parts := strings.Split(latestName, "-")
 	if len(parts) >= 3 {
-		// Remove extension if present for comparison
-		name := strings.TrimSuffix(parts[len(parts)-1], ".tar.gz")
-		if name != parts[len(parts)-1] {
-			// It was a .tar.gz file, hash is at index 1
-			return parts[1]
-		}
-		// Could be a single file, try to extract hash
-		// Format: YYYYMMDD-HASH-HHMMSSZ or YYYYMMDD-HASH-HHMMSSZ.tar.gz
-		if len(parts) >= 3 {
-			return parts[1]
-		}
+		return strings.TrimSuffix(parts[2], ".tar.gz")
 	}
 
 	return ""

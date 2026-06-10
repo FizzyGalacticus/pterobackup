@@ -5,6 +5,9 @@ const privateKeyValue = document.getElementById('privateKeyValue');
 const publicKeyOutput = document.getElementById('publicKeyOutput');
 const generateKeypair = document.getElementById('generateKeypair');
 let scheduleItems = {};
+// Holds a freshly generated (unsaved) public key so the 30-second loadPublicKey
+// interval doesn't overwrite it with the stale saved value.
+let pendingPublicKey = null;
 
 function escapeHtml(value) {
   return String(value)
@@ -90,14 +93,58 @@ async function runSingleAction(action, itemId) {
   }
 }
 
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+}
+
+function buildFileTree(paths) {
+  const root = {};
+  for (const p of paths) {
+    const parts = p.replace(/\/$/, '').split('/').filter(Boolean);
+    let node = root;
+    for (const part of parts) {
+      if (!node[part]) node[part] = {};
+      node = node[part];
+    }
+  }
+  return root;
+}
+
+function renderFileTree(tree, depth) {
+  const keys = Object.keys(tree).sort((a, b) => {
+    const aDir = Object.keys(tree[a]).length > 0;
+    const bDir = Object.keys(tree[b]).length > 0;
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    return a.localeCompare(b);
+  });
+
+  if (keys.length === 0) return '';
+
+  return keys.map((key) => {
+    const children = tree[key];
+    const hasChildren = Object.keys(children).length > 0;
+    if (hasChildren) {
+      const inner = renderFileTree(children, depth + 1);
+      return `<li class="tree-item tree-dir">
+        <details ${depth < 2 ? 'open' : ''}>
+          <summary class="tree-label">${escapeHtml(key)}/</summary>
+          <ul class="tree-list">${inner}</ul>
+        </details>
+      </li>`;
+    }
+    return `<li class="tree-item tree-file"><span class="tree-label">${escapeHtml(key)}</span></li>`;
+  }).join('');
+}
+
 async function loadItemArtifacts(itemId, listNode) {
   const detailsNode = listNode.closest('.artifact-details');
 
   if (!itemId) {
     listNode.innerHTML = '<li class="artifact-empty">Save config before loading artifact list.</li>';
-    if (detailsNode) {
-      setArtifactTotal(detailsNode, 0);
-    }
+    if (detailsNode) setArtifactTotal(detailsNode, 0);
     return;
   }
 
@@ -105,31 +152,42 @@ async function loadItemArtifacts(itemId, listNode) {
     const payload = await callJSON(`/api/backup/item/files?itemId=${encodeURIComponent(itemId)}`, 'GET');
     const items = payload.items || [];
     const totalMB = items.reduce((sum, item) => sum + Number(item.sizeMB || 0), 0);
-    if (detailsNode) {
-      setArtifactTotal(detailsNode, totalMB);
-    }
+    if (detailsNode) setArtifactTotal(detailsNode, totalMB);
 
     if (items.length === 0) {
       listNode.innerHTML = '<li class="artifact-empty">No backups stored yet.</li>';
       return;
     }
 
-    listNode.innerHTML = items
-      .map((item) => `
-        <li class="artifact-row">
+    listNode.innerHTML = items.map((item) => {
+      const isTar = item.name.endsWith('.tar.gz');
+      const dlHref = `/api/backup/item/file?itemId=${encodeURIComponent(itemId)}&name=${encodeURIComponent(item.name)}`;
+      const contentsSection = isTar
+        ? `<details class="archive-contents">
+             <summary class="archive-contents-summary">Contents</summary>
+             <div class="archive-contents-body">
+               <span class="archive-loading">Loading…</span>
+             </div>
+           </details>`
+        : '';
+
+      return `<li class="artifact-row" data-name="${escapeHtml(item.name)}">
+        <div class="artifact-header">
           <span class="artifact-name">${escapeHtml(item.name)}</span>
-          <span class="artifact-size">${Number(item.sizeMB || 0).toFixed(2)} MB</span>
-          <button type="button" class="artifact-delete danger-sm" data-name="${escapeHtml(item.name)}">Delete</button>
-        </li>
-      `)
-      .join('');
+          <div class="artifact-meta">
+            <span class="artifact-size">${Number(item.sizeMB || 0).toFixed(2)} MB</span>
+            <a class="btn-sm artifact-download" href="${dlHref}" download="${escapeHtml(item.name)}">Download</a>
+            <button type="button" class="artifact-delete danger-sm" data-name="${escapeHtml(item.name)}">Delete</button>
+          </div>
+        </div>
+        ${contentsSection}
+      </li>`;
+    }).join('');
 
     listNode.querySelectorAll('.artifact-delete').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const name = btn.dataset.name;
-        if (!confirm(`Delete backup file "${name}"?`)) {
-          return;
-        }
+        if (!confirm(`Delete backup file "${name}"?`)) return;
         try {
           await callJSON(
             `/api/backup/item/file?itemId=${encodeURIComponent(itemId)}&name=${encodeURIComponent(name)}`,
@@ -142,11 +200,34 @@ async function loadItemArtifacts(itemId, listNode) {
         }
       });
     });
+
+    listNode.querySelectorAll('.archive-contents').forEach((details) => {
+      const row = details.closest('.artifact-row');
+      const name = row?.dataset.name || '';
+      const body = details.querySelector('.archive-contents-body');
+      let loaded = false;
+      details.addEventListener('toggle', async () => {
+        if (!details.open || loaded) return;
+        loaded = true;
+        try {
+          const result = await callJSON(
+            `/api/backup/item/file/contents?itemId=${encodeURIComponent(itemId)}&name=${encodeURIComponent(name)}`,
+            'GET',
+          );
+          const paths = (result.paths || []).map((p) => p.replace(/^payload\//, ''));
+          const tree = buildFileTree(paths);
+          const html = renderFileTree(tree, 0);
+          body.innerHTML = html
+            ? `<ul class="tree-list tree-root">${html}</ul>`
+            : '<span class="archive-loading">Archive is empty.</span>';
+        } catch (err) {
+          body.innerHTML = `<span class="archive-loading">Failed: ${escapeHtml(err.message)}</span>`;
+        }
+      });
+    });
   } catch (err) {
     listNode.innerHTML = `<li class="artifact-empty">Failed to load artifacts: ${escapeHtml(err.message)}</li>`;
-    if (detailsNode) {
-      setArtifactTotal(detailsNode, 0);
-    }
+    if (detailsNode) setArtifactTotal(detailsNode, 0);
   }
 }
 
@@ -332,6 +413,11 @@ async function loadSchedule() {
 }
 
 async function loadPublicKey() {
+  if (pendingPublicKey !== null) {
+    publicKeyOutput.textContent = pendingPublicKey || 'Unable to derive public key.';
+    return;
+  }
+
   try {
     const payload = await callJSON('/api/ssh/public-key', 'GET');
     if (!payload.hasKey) {
@@ -369,6 +455,7 @@ document.getElementById('saveConfig').addEventListener('click', async () => {
   try {
     const cfg = getConfigFromForm();
     await callJSON('/api/config', 'PUT', cfg);
+    pendingPublicKey = null;
     log('Saved config');
     await loadPublicKey();
     await refreshOpenArtifactPanels();
@@ -403,11 +490,27 @@ document.getElementById('copyPublicKey').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('revokeKey').addEventListener('click', async () => {
+  if (!confirm('This will remove the current SSH key from the remote host\'s authorized_keys and replace it with a newly generated key. You will need to add the new public key to the host before the next backup runs. Continue?')) {
+    return;
+  }
+  try {
+    const result = await callJSON('/api/ssh/revoke-key', 'POST');
+    pendingPublicKey = result.publicKey || null;
+    await loadConfig();
+    await loadPublicKey();
+    log('SSH key rotated. Copy the new public key and add it to the host\'s authorized_keys.');
+  } catch (err) {
+    log(`Revoke key failed: ${err.message}`);
+  }
+});
+
 generateKeypair.addEventListener('click', async () => {
   try {
     const payload = await callJSON('/api/ssh/generate-keypair', 'POST');
     privateKeyValue.value = normalizeKeyText(payload.privateKey || '');
-    publicKeyOutput.textContent = payload.publicKey || 'Unable to generate public key.';
+    pendingPublicKey = payload.publicKey || null;
+    publicKeyOutput.textContent = pendingPublicKey || 'Unable to generate public key.';
     document.getElementById('authMethod').value = 'key';
     log('Generated a new SSH keypair. Save config to persist it.');
   } catch (err) {

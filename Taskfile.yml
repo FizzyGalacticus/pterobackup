@@ -1,0 +1,28 @@
+version: '3'
+
+vars:
+  IMAGE: pterobackup:latest
+  PORT: '8080'
+
+tasks:
+  build:
+    desc: Build the pterobackup Docker image
+    cmds:
+      - docker build -t {{.IMAGE}} .
+      - docker images {{.IMAGE}}
+
+  start:
+    desc: Run the pterobackup container with local ./config and ./backups volumes
+    cmds:
+      - mkdir -p config backups
+      - docker run --rm
+          -p {{.PORT}}:8080
+          -v "$PWD/config:/config"
+          -v "$PWD/backups:/backups"
+          {{.IMAGE}}
+
+  up:
+    desc: Build the image then start the container
+    cmds:
+      - task: build
+      - task: start

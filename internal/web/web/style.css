@@ -172,9 +172,6 @@ input::placeholder {
 }
 
 .artifact-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0.4rem 0.55rem;
@@ -182,14 +179,46 @@ input::placeholder {
   font-size: 0.82rem;
 }
 
+.artifact-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .artifact-name {
   word-break: break-all;
+  flex: 1;
+}
+
+.artifact-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
 }
 
 .artifact-size {
   color: var(--muted);
   white-space: nowrap;
-  margin-left: auto;
+}
+
+.artifact-download.btn-sm {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  line-height: 1.6;
+}
+
+.artifact-download.btn-sm:hover {
+  background: var(--accent);
+  color: #04211b;
 }
 
 .artifact-delete.danger-sm {
@@ -206,6 +235,74 @@ input::placeholder {
 .artifact-delete.danger-sm:hover {
   background: var(--danger);
   color: #fff;
+}
+
+/* Archive contents collapsible */
+
+.archive-contents {
+  margin-top: 0.4rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.35rem;
+}
+
+.archive-contents-summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  user-select: none;
+}
+
+.archive-contents-summary::before {
+  content: '▶';
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+}
+
+.archive-contents[open] .archive-contents-summary::before {
+  transform: rotate(90deg);
+}
+
+.archive-contents-body {
+  margin-top: 0.35rem;
+}
+
+.archive-loading {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* File tree */
+
+.tree-root {
+  padding-left: 0;
+}
+
+.tree-list {
+  list-style: none;
+  margin: 0.15rem 0 0;
+  padding: 0 0 0 1rem;
+  border-left: 1px solid var(--line);
+}
+
+.tree-item {
+  padding: 0.05rem 0;
+  font-size: 0.78rem;
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.tree-dir > details > summary.tree-label {
+  cursor: pointer;
+  color: var(--accent-2);
+  list-style: none;
+  user-select: none;
+}
+
+.tree-file .tree-label {
+  color: var(--ink);
 }
 
 .artifact-empty {
@@ -257,9 +354,15 @@ button.primary {
   border-color: var(--accent);
 }
 
-button[data-action="remove"] {
+button[data-action="remove"],
+button.danger {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+button.danger:hover {
+  background: var(--danger);
+  color: #fff;
 }
 
 pre {

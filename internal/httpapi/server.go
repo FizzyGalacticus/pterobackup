@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -38,6 +41,8 @@ type backupRunner interface {
 
 type runnerFactory func(cfg domain.SSHConfig) backupRunner
 
+type sshConnectFunc func(ctx context.Context, cfg domain.SSHConfig) (backup.RemoteExecutor, io.Closer, error)
+
 type scheduleReader interface {
 	Snapshot() map[string]domain.BackupScheduleStatus
 }
@@ -45,6 +50,7 @@ type scheduleReader interface {
 type Server struct {
 	store         configStore
 	newRunner     runnerFactory
+	sshConnect    sshConnectFunc
 	schedule      scheduleReader
 	serveStaticFS http.Handler
 }
@@ -58,6 +64,7 @@ func NewServer(store configStore) (*Server, error) {
 	server := &Server{
 		store:         store,
 		newRunner:     defaultRunnerFactory,
+		sshConnect:    defaultSSHConnect,
 		serveStaticFS: http.FileServer(http.FS(sub)),
 	}
 
@@ -69,18 +76,25 @@ func defaultRunnerFactory(sshCfg domain.SSHConfig) backupRunner {
 	return backup.NewService(factory)
 }
 
+func defaultSSHConnect(ctx context.Context, cfg domain.SSHConfig) (backup.RemoteExecutor, io.Closer, error) {
+	exec, _, closer, err := remote.NewSSHFactory(cfg).Connect(ctx)
+	return exec, closer, err
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/backup", s.handleBackup)
 	mux.HandleFunc("/api/backup/item", s.handleBackupItem)
 	mux.HandleFunc("/api/backup/item/files", s.handleBackupItemFiles)
-	mux.HandleFunc("/api/backup/item/file", s.handleDeleteBackupFile)
+	mux.HandleFunc("/api/backup/item/file/contents", s.handleBackupFileContents)
+	mux.HandleFunc("/api/backup/item/file", s.handleBackupItemFile)
 	mux.HandleFunc("/api/restore", s.handleRestore)
 	mux.HandleFunc("/api/restore/item", s.handleRestoreItem)
 	mux.HandleFunc("/api/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/ssh/public-key", s.handleSSHPublicKey)
 	mux.HandleFunc("/api/ssh/generate-keypair", s.handleSSHGenerateKeypair)
+	mux.HandleFunc("/api/ssh/revoke-key", s.handleSSHRevokeKey)
 	mux.Handle("/", s.serveStaticFS)
 
 	return withJSONError(mux)
@@ -222,47 +236,82 @@ func (s *Server) handleBackupItemFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": artifacts})
 }
 
-func (s *Server) handleDeleteBackupFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
+// resolveBackupFilePath validates query params and returns the absolute local path
+// of a backup file, guarding against path traversal.
+func resolveBackupFilePath(r *http.Request, cfg domain.AppConfig) (filePath, fileName string, err error) {
 	itemID := strings.TrimSpace(r.URL.Query().Get("itemId"))
-	fileName := strings.TrimSpace(r.URL.Query().Get("name"))
+	fileName = strings.TrimSpace(r.URL.Query().Get("name"))
 	if itemID == "" || fileName == "" {
-		writeErr(w, http.StatusBadRequest, "params", errors.New("itemId and name are required"))
-		return
+		return "", "", errors.New("itemId and name are required")
 	}
-
-	// Reject any path traversal attempts.
 	if strings.ContainsAny(fileName, "/\\") || fileName == ".." {
-		writeErr(w, http.StatusBadRequest, "name", errors.New("invalid file name"))
-		return
+		return "", "", errors.New("invalid file name")
 	}
+	item, err := findItemByID(cfg, itemID)
+	if err != nil {
+		return "", "", fmt.Errorf("find backup item: %w", err)
+	}
+	targetDir := backup.TargetDirectoryForItem(*item)
+	resolved := filepath.Join(targetDir, fileName)
+	if !strings.HasPrefix(resolved, targetDir+string(os.PathSeparator)) {
+		return "", "", errors.New("invalid file name")
+	}
+	return resolved, fileName, nil
+}
 
+func (s *Server) handleBackupItemFile(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleDownloadBackupFile(w, r)
+	case http.MethodDelete:
+		s.handleDeleteBackupFile(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleDownloadBackupFile(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.store.Load()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "load config", err)
 		return
 	}
-
-	item, err := findItemByID(cfg, itemID)
+	filePath, fileName, err := resolveBackupFilePath(r, cfg)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "find backup item", err)
+		writeErr(w, http.StatusBadRequest, "resolve file", err)
 		return
 	}
-
-	targetDir := backup.TargetDirectoryForItem(*item)
-	path := filepath.Join(targetDir, fileName)
-
-	// Confirm the resolved path is still inside targetDir.
-	if !strings.HasPrefix(path, targetDir+string(os.PathSeparator)) {
-		writeErr(w, http.StatusBadRequest, "name", errors.New("invalid file name"))
+	f, err := os.Open(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeErr(w, http.StatusNotFound, "open file", err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "open file", err)
 		return
 	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "stat file", err)
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+	http.ServeContent(w, r, fileName, stat.ModTime(), f)
+}
 
-	if err := os.Remove(path); err != nil {
+func (s *Server) handleDeleteBackupFile(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.store.Load()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load config", err)
+		return
+	}
+	filePath, _, err := resolveBackupFilePath(r, cfg)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "resolve file", err)
+		return
+	}
+	if err := os.Remove(filePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeErr(w, http.StatusNotFound, "delete file", err)
 			return
@@ -270,8 +319,58 @@ func (s *Server) handleDeleteBackupFile(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "delete file", err)
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleBackupFileContents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := s.store.Load()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load config", err)
+		return
+	}
+	filePath, _, err := resolveBackupFilePath(r, cfg)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "resolve file", err)
+		return
+	}
+	paths, err := listTarContents(filePath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "read archive", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
+}
+
+func listTarContents(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	var paths []string
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if hdr.Typeflag != tar.TypeDir {
+			paths = append(paths, hdr.Name)
+		}
+	}
+	return paths, nil
 }
 
 func (s *Server) handleRestoreItem(w http.ResponseWriter, r *http.Request) {
@@ -451,6 +550,70 @@ func (s *Server) handleSSHGenerateKeypair(w http.ResponseWriter, r *http.Request
 		"privateKey": privateKey,
 		"publicKey":  publicKey,
 	})
+}
+
+func (s *Server) handleSSHRevokeKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg, err := s.store.Load()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load config", err)
+		return
+	}
+
+	pubKey, hasKey, err := publicKeyFromSSHConfig(cfg.SSH)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "derive public key", err)
+		return
+	}
+	if !hasKey {
+		writeErr(w, http.StatusBadRequest, "revoke key", errors.New("no SSH key configured"))
+		return
+	}
+
+	// The authorized_keys line is "type blob [comment]"; blob is base64 (no shell-special chars).
+	fields := strings.Fields(pubKey)
+	if len(fields) < 2 {
+		writeErr(w, http.StatusInternalServerError, "parse public key", errors.New("unexpected key format"))
+		return
+	}
+	keyBlob := fields[1]
+
+	exec, closer, err := s.sshConnect(r.Context(), cfg.SSH)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "connect ssh", err)
+		return
+	}
+	defer closer.Close()
+
+	// Use awk field comparison (not regex) so special chars in the blob are safe.
+	removeCmd := fmt.Sprintf(
+		"if [ -f ~/.ssh/authorized_keys ]; then awk -v k='%s' '$2 != k' ~/.ssh/authorized_keys > /tmp/.pterobackup_ak && mv /tmp/.pterobackup_ak ~/.ssh/authorized_keys; fi",
+		keyBlob,
+	)
+	if _, stderr, err := exec.Run(r.Context(), removeCmd); err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Sprintf("remove from authorized_keys: %s", strings.TrimSpace(stderr)), err)
+		return
+	}
+
+	newPrivateKey, newPublicKey, err := generateRSAKeypair()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "generate new keypair", err)
+		return
+	}
+
+	cfg.SSH.PrivateKeyValue = newPrivateKey
+	cfg.SSH.PrivateKeyPath = ""
+	cfg.SSH.AuthMethod = domain.AuthMethodKey
+	if err := s.store.Save(cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "save config", err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "publicKey": newPublicKey})
 }
 
 func publicKeyFromSSHConfig(cfg domain.SSHConfig) (publicKey string, hasKey bool, err error) {

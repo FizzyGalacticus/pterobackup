@@ -21,14 +21,15 @@ type RunnerFactory func(cfg domain.SSHConfig) BackupRunner
 
 // Service periodically evaluates configured backup intervals and runs due jobs.
 type Service struct {
-	store         ConfigStore
-	newRunner     RunnerFactory
-	checkEvery    time.Duration
-	logf          func(string, ...any)
-	mu            sync.RWMutex
-	nextRunByItem map[string]time.Time
-	lastSuccess   map[string]time.Time
-	lastError     map[string]string
+	store              ConfigStore
+	newRunner          RunnerFactory
+	checkEvery         time.Duration
+	logf               func(string, ...any)
+	mu                 sync.RWMutex
+	nextRunByItem      map[string]time.Time
+	lastSuccess        map[string]time.Time
+	lastError          map[string]string
+	lastIntervalByItem map[string]int
 }
 
 func NewService(store ConfigStore, newRunner RunnerFactory, checkEvery time.Duration) *Service {
@@ -37,13 +38,14 @@ func NewService(store ConfigStore, newRunner RunnerFactory, checkEvery time.Dura
 	}
 
 	return &Service{
-		store:         store,
-		newRunner:     newRunner,
-		checkEvery:    checkEvery,
-		logf:          log.Printf,
-		nextRunByItem: map[string]time.Time{},
-		lastSuccess:   map[string]time.Time{},
-		lastError:     map[string]string{},
+		store:              store,
+		newRunner:          newRunner,
+		checkEvery:         checkEvery,
+		logf:               log.Printf,
+		nextRunByItem:      map[string]time.Time{},
+		lastSuccess:        map[string]time.Time{},
+		lastError:          map[string]string{},
+		lastIntervalByItem: map[string]int{},
 	}
 }
 
@@ -107,7 +109,18 @@ func (s *Service) runOnce(ctx context.Context) {
 		if !ok {
 			s.nextRunByItem[item.ID] = now
 			next = now
+		} else if lastInterval, known := s.lastIntervalByItem[item.ID]; known && lastInterval != item.IntervalMinutes {
+			// Interval changed: recalculate next run from last success so the
+			// new cadence takes effect immediately rather than after the old
+			// scheduled time fires.
+			if lastSucc, hasSucc := s.lastSuccess[item.ID]; hasSucc {
+				next = lastSucc.Add(time.Duration(item.IntervalMinutes) * time.Minute)
+			} else {
+				next = now
+			}
+			s.nextRunByItem[item.ID] = next
 		}
+		s.lastIntervalByItem[item.ID] = item.IntervalMinutes
 
 		if now.Before(next) {
 			continue
@@ -124,6 +137,7 @@ func (s *Service) runOnce(ctx context.Context) {
 		delete(s.nextRunByItem, itemID)
 		delete(s.lastSuccess, itemID)
 		delete(s.lastError, itemID)
+		delete(s.lastIntervalByItem, itemID)
 	}
 	s.mu.Unlock()
 

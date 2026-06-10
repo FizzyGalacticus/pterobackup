@@ -15,9 +15,7 @@ var unsafeNameChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func backupBaseName(hash string) string {
 	ts := time.Now().UTC().Format("20060102-150405Z")
-	date := time.Now().UTC().Format("20060102")
-
-	return fmt.Sprintf("%s-%s-%s", date, hash, ts)
+	return fmt.Sprintf("%s-%s", ts, hash)
 }
 
 func sanitizeName(v string) string {
